@@ -1,3 +1,0 @@
-[submodule "debian"]
-	path = debian
-	url = https://github.com/Wind4/vlmcsd-debian.git

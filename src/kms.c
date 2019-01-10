@@ -66,7 +66,16 @@ int32_t getProductIndex(const GUID* guid, const PVlmcsdData_t list, const int32_
 
 
 #ifndef NO_RANDOM_EPID
-static const uint16_t HostBuilds[] = { 6002, 7601, 9200, 9600, 14393, 17763 };
+// HostType and OSBuild
+static const struct KMSHostOS { uint16_t Type; uint16_t Build; } HostOS[] =
+{
+	{ 55041, 6002 }, // Windows Server 2008 SP2
+	{ 55041, 7601 }, // Windows Server 2008 R2 SP1
+	{  5426, 9200 }, // Windows Server 2012
+	{  6401, 9600 }, // Windows Server 2012 R2
+	{  3612, 14393 }, // Windows Server 2016
+};
+
 
 // Valid language identifiers to be used in the ePID
 static const uint16_t LcidList[] = {
@@ -80,13 +89,6 @@ static const uint16_t LcidList[] = {
 	17418, 18442, 19466, 20490, 1089, 1053, 2077, 1114, 1097, 1092, 1098, 1054, 1074, 1058, 1056, 1091, 2115, 1066, 1106, 1076, 1077
 };
 
-uint16_t getPlatformId(uint16_t hostBuild)
-{
-	if (hostBuild < 9000) return 55041;
-	if (hostBuild <= 9500) return 5426;
-	if (hostBuild <= 10000) return 6401;
-	return 3612;
-}
 
 #ifdef _PEDANTIC
 uint16_t IsValidLcid(const uint16_t lcid)
@@ -100,19 +102,6 @@ uint16_t IsValidLcid(const uint16_t lcid)
 
 	return 0;
 }
-
-
-uint16_t IsValidHostBuild(const uint16_t hostBuild)
-{
-	const uint16_t *hostOS;
-
-	for (hostOS = HostBuilds; hostOS < HostBuilds + vlmcsd_countof(HostBuilds); hostOS++)
-	{
-		if (hostBuild == *hostOS) return hostBuild;
-	}
-
-	return 0;
-}
 #endif // _PEDANTIC
 #endif // NO_RANDOM_EPID
 
@@ -121,7 +110,7 @@ uint16_t IsValidHostBuild(const uint16_t hostBuild)
 // FILETIME is 100 nanoseconds from 1601-01-01. Must be 64 bits.
 void getUnixTimeAsFileTime(FILETIME *const ts)
 {
-	const int64_t unixtime = (int64_t)time(NULL);
+	int64_t unixtime = (int64_t)time(NULL);
 	int64_t *filetime = (int64_t*)ts;
 
 	PUT_UA64LE(filetime, (unixtime + 11644473600LL) * 10000000LL);
@@ -217,7 +206,7 @@ void InitializeClientLists()
 	{
 		for (i = 0; i < KmsData->AppItemCount; i++)
 		{
-			const uint8_t maxCount = KmsData->AppItemList[i].NCountPolicy;
+			uint8_t maxCount = KmsData->AppItemList[i].NCountPolicy;
 			ClientLists[i].CurrentCount = (maxCount >> 1) - 1;
 			ClientLists[i].MaxCount = maxCount;
 
@@ -251,22 +240,22 @@ static char* itoc(char *const c, const int i, uint_fast8_t digits)
 	return c;
 }
 
-static uint8_t getRandomServerType()
+static int getRandomServerType()
 {
 #	if defined(USE_MSRPC) || defined(SIMPLE_RPC)
 
-	return rand() % vlmcsd_countof(HostBuilds);
+	return rand() % (int)vlmcsd_countof(HostOS);
 
 #	else // !defined(USE_MSRPC) && !defined(SIMPLE_RPC)
 	if (!UseServerRpcBTFN)
 	{
 		// This isn't possible at all, e.g. KMS host on XP
-		return rand() % (int)vlmcsd_countof(HostBuilds);
+		return rand() % (int)vlmcsd_countof(HostOS);
 	}
 
-	// return 9200/9600/14393/17763 if NDR64 is in use, otherwise 6002/7601
-	if (UseServerRpcNDR64) return rand() % ((int)vlmcsd_countof(HostBuilds) - 2) + 2;
-	return rand() % 2;
+	// return 9200/9600/14393 if NDR64 is in use, otherwise 6002/7601
+	if (UseServerRpcNDR64) return (rand() % 3) + 2;
+	return (rand() % 2);
 
 #	endif // !defined(USE_MSRPC) && !defined(SIMPLE_RPC)
 }
@@ -275,45 +264,44 @@ static uint8_t getRandomServerType()
 /*
  * Generates a random ePID
  */
-static void generateRandomPid(const int index, char *const szPid, int16_t lang, uint16_t hostBuild)
+static void generateRandomPid(int index, char *const szPid, int serverType, int16_t lang)
 {
 	char numberBuffer[12];
 
-	if (!hostBuild)
+	if (serverType < 0 || serverType >= (int)vlmcsd_countof(HostOS))
 	{
-		hostBuild = HostBuilds[getRandomServerType()];
+		serverType = getRandomServerType();
 	}
 
-
-	strcpy(szPid, itoc(numberBuffer, getPlatformId(hostBuild), 5));
+	strcpy(szPid, itoc(numberBuffer, HostOS[serverType].Type, 5));
 	strcat(szPid, "-");
 
 	//if (index > 3) index = 0;
 
-	const PCsvlkData_t csvlkData = &KmsData->CsvlkData[index];
+	PCsvlkData_t csvlkData = &KmsData->CsvlkData[index];
 	strcat(szPid, itoc(numberBuffer, csvlkData->GroupId, 5));
 	strcat(szPid, "-");
 
-	const int keyId = (rand32() % (csvlkData->MaxKeyId - csvlkData->MinKeyId)) + csvlkData->MinKeyId;
+	int keyId = (rand32() % (csvlkData->MaxKeyId - csvlkData->MinKeyId)) + csvlkData->MinKeyId;
 	strcat(szPid, itoc(numberBuffer, keyId / 1000000, 3));
 	strcat(szPid, "-");
 	strcat(szPid, itoc(numberBuffer, keyId % 1000000, 6));
 	strcat(szPid, "-03-");
 
-	if (lang < 1) lang = LcidList[rand() % vlmcsd_countof(LcidList)];
+	if (lang < 0) lang = LcidList[rand() % vlmcsd_countof(LcidList)];
 	strcat(szPid, itoc(numberBuffer, lang, 0));
 	strcat(szPid, "-");
 
-	strcat(szPid, itoc(numberBuffer, hostBuild, 0));
+	strcat(szPid, itoc(numberBuffer, HostOS[serverType].Build, 0));
 	strcat(szPid, ".0000-");
 
-#	define minTime ((time_t)1538490811) /* Release Date Win 2019 */
+#	define minTime ((time_t)1470175200) /* Release Date Win 2016 */
 
 	time_t maxTime;
 	time(&maxTime);
 
 #	ifndef BUILD_TIME
-#	define BUILD_TIME 1538922811
+#	define BUILD_TIME 1481079869
 #   endif
 
 	if (maxTime < (time_t)BUILD_TIME) // Just in case the system time is < 10/17/2013 1:00 pm
@@ -322,7 +310,7 @@ static void generateRandomPid(const int index, char *const szPid, int16_t lang, 
 	time_t kmsTime = (rand32() % (maxTime - minTime)) + minTime;
 	struct tm *pidTime = gmtime(&kmsTime);
 
-	strcat(szPid, itoc(numberBuffer, pidTime->tm_yday + 1, 3));
+	strcat(szPid, itoc(numberBuffer, pidTime->tm_yday, 3));
 	strcat(szPid, itoc(numberBuffer, pidTime->tm_year + 1900, 4));
 }
 
@@ -335,7 +323,8 @@ void randomPidInit()
 {
 	uint32_t i;
 
-	const int16_t lang = Lcid ? Lcid : LcidList[rand() % vlmcsd_countof(LcidList)];
+	int serverType = getRandomServerType();
+	int16_t lang = Lcid ? Lcid : LcidList[rand() % vlmcsd_countof(LcidList)];
 
 	for (i = 0; i < KmsData->CsvlkCount; i++)
 	{
@@ -343,7 +332,7 @@ void randomPidInit()
 
 		char Epid[PID_BUFFER_SIZE];
 
-		generateRandomPid(i, Epid, lang, HostBuild);
+		generateRandomPid(i, Epid, serverType, lang);
 		KmsResponseParameters[i].Epid = (const char*)vlmcsd_strdup(Epid);
 
 #ifndef NO_LOG
@@ -400,7 +389,7 @@ static void logRequest(const REQUEST *const baseRequest)
 #ifndef IS_LIBRARY
 static void getEpidFromString(RESPONSE *const Response, const char *const pid)
 {
-	const size_t length = utf8_to_ucs2(Response->KmsPID, pid, PID_BUFFER_SIZE, PID_BUFFER_SIZE * 3);
+	size_t length = utf8_to_ucs2(Response->KmsPID, pid, PID_BUFFER_SIZE, PID_BUFFER_SIZE * 3);
 	Response->PIDSize = LE32(((unsigned int)length + 1) << 1);
 }
 
@@ -410,28 +399,28 @@ static void getEpidFromString(RESPONSE *const Response, const char *const pid)
  */
 static void getEpid(RESPONSE *const baseResponse, const char** EpidSource, const int32_t index, BYTE *const HwId, const char* defaultEPid)
 {
-#if !defined(NO_RANDOM_EPID) || !defined(NO_CL_PIDS) || !defined(NO_INI_FILE)
+	#if !defined(NO_RANDOM_EPID) || !defined(NO_CL_PIDS) || !defined(NO_INI_FILE)
 	const char* pid;
 	if (KmsResponseParameters[index].Epid == NULL)
 	{
-#ifndef NO_RANDOM_EPID
+		#ifndef NO_RANDOM_EPID
 		if (RandomizationLevel == 2)
 		{
-			char ePid[PID_BUFFER_SIZE];
-			generateRandomPid(index, ePid, Lcid, HostBuild);
-			pid = ePid;
+			char szPid[PID_BUFFER_SIZE];
+			generateRandomPid(index, szPid, -1, Lcid ? Lcid : -1);
+			pid = szPid;
 
-#ifndef NO_LOG
+			#ifndef NO_LOG
 			*EpidSource = "randomized on every request";
-#endif // NO_LOG
+			#endif // NO_LOG
 		}
 		else
-#endif // NO_RANDOM_EPID
+		#endif // NO_RANDOM_EPID
 		{
 			pid = defaultEPid;
-#ifndef NO_LOG
+			#ifndef NO_LOG
 			*EpidSource = "vlmcsd default";
-#endif // NO_LOG
+			#endif // NO_LOG
 		}
 	}
 	else
@@ -441,14 +430,14 @@ static void getEpid(RESPONSE *const baseResponse, const char** EpidSource, const
 		if (HwId && KmsResponseParameters[index].HwId != NULL)
 			memcpy(HwId, KmsResponseParameters[index].HwId, sizeof(((RESPONSE_V6 *)0)->HwId));
 
-#ifndef NO_LOG
+		#ifndef NO_LOG
 		*EpidSource = KmsResponseParameters[index].EpidSource;
-#endif // NO_LOG
+		#endif // NO_LOG
 	}
 
 	getEpidFromString(baseResponse, pid);
 
-#else // defined(NO_RANDOM_EPID) && defined(NO_CL_PIDS) && !defined(NO_INI_FILE)
+	#else // defined(NO_RANDOM_EPID) && defined(NO_CL_PIDS) && !defined(NO_INI_FILE)
 
 	getEpidFromString(baseResponse, defaultEPid);
 
@@ -456,7 +445,7 @@ static void getEpid(RESPONSE *const baseResponse, const char** EpidSource, const
 	*EpidSource = "vlmcsd default";
 #	endif // NO_LOG
 
-#endif // defined(NO_RANDOM_EPID) && defined(NO_CL_PIDS) && !defined(NO_INI_FILE)
+	#endif // defined(NO_RANDOM_EPID) && defined(NO_CL_PIDS) && !defined(NO_INI_FILE)
 }
 #endif // IS_LIBRARY
 
@@ -536,8 +525,8 @@ static HRESULT __stdcall CreateResponseBaseCallback(const REQUEST *const baseReq
 #endif // NO_LOG
 
 	char* ePid;
-	const DWORD minClients = LE32(baseRequest->N_Policy);
-	const DWORD required_clients = minClients < 1 ? 1 : minClients << 1;
+	DWORD minClients = LE32(baseRequest->N_Policy);
+	DWORD required_clients = minClients < 1 ? 1 : minClients << 1;
 
 	int32_t index = getProductIndex(&baseRequest->KMSID, KmsData->KmsItemList, KmsData->KmsItemCount, NULL, &ePid);
 
@@ -554,7 +543,7 @@ static HRESULT __stdcall CreateResponseBaseCallback(const REQUEST *const baseReq
 
 	if (CheckClientTime)
 	{
-		const time_t requestTime = (time_t)fileTimeToUnixTime(&baseRequest->ClientTime);
+		time_t requestTime = (time_t)fileTimeToUnixTime(&baseRequest->ClientTime);
 
 		if (llabs(requestTime - time(NULL)) > 60 * 60 * 4)
 		{
@@ -588,12 +577,12 @@ static HRESULT __stdcall CreateResponseBaseCallback(const REQUEST *const baseReq
 	}
 
 #	ifndef NO_CLIENT_LIST
-	const int32_t appIndex = index < 0 ? 0 : KmsData->KmsItemList[index].AppIndex;
+	int32_t appIndex = index < 0 ? 0 : KmsData->KmsItemList[index].AppIndex;
 #	endif // NO_CLIENT_LIST
 
 #	endif // !NO_STRICT_MODES
 
-	const int32_t ePidIndex = index < 0 ? 0 : KmsData->KmsItemList[index].EPidIndex;
+	int32_t ePidIndex = index < 0 ? 0 : KmsData->KmsItemList[index].EPidIndex;
 
 #	if !defined(NO_STRICT_MODES)
 
@@ -664,7 +653,7 @@ static HRESULT __stdcall CreateResponseBaseCallback(const REQUEST *const baseReq
 #	endif // !NO_CLIENT_LIST
 #	endif // !defined(NO_STRICT_MODES)
 	{
-		const uint8_t minimum_answer_clients = (uint8_t)KmsData->CsvlkData[ePidIndex].MinActiveClients;
+		uint8_t minimum_answer_clients = (uint8_t)KmsData->CsvlkData[ePidIndex].MinActiveClients;
 		baseResponse->Count = LE32(required_clients > minimum_answer_clients ? required_clients : minimum_answer_clients);
 		//if (LE32(baseRequest->N_Policy) > LE32(baseResponse->Count)) baseResponse->Count = LE32(LE32(baseRequest->N_Policy) << 1);
 	}
@@ -712,11 +701,11 @@ size_t CreateResponseV4(REQUEST_V4 *const request_v4, BYTE *const responseBuffer
 	HRESULT hResult;
 	if (FAILED(hResult = CreateResponseBase(&request_v4->RequestBase, &Response->ResponseBase, NULL, ipstr))) return hResult;
 
-	const DWORD pidSize = LE32(Response->ResponseBase.PIDSize);
+	DWORD pidSize = LE32(Response->ResponseBase.PIDSize);
 	BYTE* postEpidPtr = responseBuffer + V4_PRE_EPID_SIZE + pidSize;
 	memmove(postEpidPtr, &Response->ResponseBase.CMID, V4_POST_EPID_SIZE);
 
-	const size_t encryptSize = V4_PRE_EPID_SIZE + V4_POST_EPID_SIZE + pidSize;
+	size_t encryptSize = V4_PRE_EPID_SIZE + V4_POST_EPID_SIZE + pidSize;
 	AesCmacV4(responseBuffer, encryptSize, responseBuffer + encryptSize);
 
 	return encryptSize + sizeof(Response->MAC);
@@ -793,7 +782,7 @@ size_t CreateResponseV6(REQUEST_V6 *restrict request_v6, BYTE *const responseBuf
 #endif
 
 	static const BYTE DefaultHwid[8] = { HWID };
-	const int_fast8_t v6 = LE16(request_v6->MajorVer) > 5;
+	int_fast8_t v6 = LE16(request_v6->MajorVer) > 5;
 	AesCtx aesCtx;
 
 	AesInitKey(&aesCtx, v6 ? AesKeyV6 : AesKeyV5, v6, AES_KEY_BYTES);
@@ -831,9 +820,9 @@ size_t CreateResponseV6(REQUEST_V6 *restrict request_v6, BYTE *const responseBuf
 	if (FAILED(hResult = CreateResponseBase(&request_v6->RequestBase, baseResponse, Response->HwId, ipstr))) return hResult;
 
 	// Convert the fixed sized struct into variable sized
-	const DWORD pidSize = LE32(baseResponse->PIDSize);
+	DWORD pidSize = LE32(baseResponse->PIDSize);
 	BYTE* postEpidPtr = responseBuffer + V6_PRE_EPID_SIZE + pidSize;
-	const size_t post_epid_size = v6 ? V6_POST_EPID_SIZE : V5_POST_EPID_SIZE;
+	size_t post_epid_size = v6 ? V6_POST_EPID_SIZE : V5_POST_EPID_SIZE;
 
 	memmove(postEpidPtr, &baseResponse->CMID, post_epid_size);
 
@@ -929,13 +918,13 @@ static uint8_t checkPidLength(const RESPONSE *const responseBase)
  */
 RESPONSE_RESULT DecryptResponseV4(RESPONSE_V4* response_v4, const int responseSize, BYTE* const rawResponse, const BYTE* const rawRequest)
 {
-	const int copySize =
+	int copySize =
 		V4_PRE_EPID_SIZE +
 		(LE32(((RESPONSE_V4*)rawResponse)->ResponseBase.PIDSize) <= PID_BUFFER_SIZE << 1 ?
 			LE32(((RESPONSE_V4*)rawResponse)->ResponseBase.PIDSize) :
 			PID_BUFFER_SIZE << 1);
 
-	const int messageSize = copySize + V4_POST_EPID_SIZE;
+	int messageSize = copySize + V4_POST_EPID_SIZE;
 
 	memcpy(response_v4, rawResponse, copySize);
 	memcpy(&response_v4->ResponseBase.CMID, rawResponse + copySize, responseSize - copySize);
@@ -1046,7 +1035,7 @@ RESPONSE_RESULT DecryptResponseV6(RESPONSE_V6* response_v6, int responseSize, BY
 	responseSize -= copySize1;
 
 	AesCtx Ctx;
-	const int_fast8_t v6 = LE16(((RESPONSE_V6*)response)->MajorVer) > 5;
+	int_fast8_t v6 = LE16(((RESPONSE_V6*)response)->MajorVer) > 5;
 
 	AesInitKey(&Ctx, v6 ? AesKeyV6 : AesKeyV5, v6, AES_KEY_BYTES);
 	AesDecryptCbc(&Ctx, NULL, response + copySize1, responseSize);
@@ -1087,7 +1076,7 @@ RESPONSE_RESULT DecryptResponseV6(RESPONSE_V6* response_v6, int responseSize, BY
 	response_v6->ResponseBase.KmsPID[PID_BUFFER_SIZE - 1] = 0;
 
 	// Copy part 2
-	const size_t copySize2 = v6 ? V6_POST_EPID_SIZE : V5_POST_EPID_SIZE;
+	size_t copySize2 = v6 ? V6_POST_EPID_SIZE : V5_POST_EPID_SIZE;
 	memcpy(&response_v6->ResponseBase.CMID, response + copySize1, copySize2);
 
 	// Decrypting the response is finished here. Now we check the results for validity
@@ -1095,7 +1084,7 @@ RESPONSE_RESULT DecryptResponseV6(RESPONSE_V6* response_v6, int responseSize, BY
 	// as a debug tool for KMS emulators.
 
 	REQUEST_V6* request_v6 = (REQUEST_V6*)rawRequest;
-	const DWORD decryptSize = sizeof(request_v6->IV) + sizeof(request_v6->RequestBase) + sizeof(request_v6->Pad);
+	DWORD decryptSize = sizeof(request_v6->IV) + sizeof(request_v6->RequestBase) + sizeof(request_v6->Pad);
 
 	AesDecryptCbc(&Ctx, NULL, request_v6->IV, decryptSize);
 

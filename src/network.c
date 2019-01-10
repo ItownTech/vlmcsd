@@ -99,7 +99,7 @@ static int_fast8_t getSocketList(struct addrinfo **saList, const char *const add
 {
 	int status;
 	char *szHost, *szPort;
-	const size_t len = strlen(addr) + 1;
+	size_t len = strlen(addr) + 1;
 
 	// Don't alloca too much
 	if (len > 264) return FALSE;
@@ -156,7 +156,7 @@ int_fast8_t isDisconnected(const SOCKET s)
 
 	if (!setBlockingEnabled(s, FALSE)) return TRUE;
 
-	const int n = recv(s, buffer, 1, MSG_PEEK);
+	int n = recv(s, buffer, 1, MSG_PEEK);
 
 	if (!setBlockingEnabled(s, TRUE)) return TRUE;
 	if (n == 0) return TRUE;
@@ -200,7 +200,7 @@ static int_fast8_t isPrivateIPAddress(struct sockaddr* addr, socklen_t* length)
 
 	case AF_INET:
 	{
-		const uint32_t ipv4addr = BE32(((struct sockaddr_in*)addr)->sin_addr.s_addr);
+		uint32_t ipv4addr = BE32(((struct sockaddr_in*)addr)->sin_addr.s_addr);
 
 		if
 			(
@@ -244,7 +244,11 @@ SOCKET connectToAddress(const char *const addr, const int AddressFamily, int_fas
 
 		if (ip2str(szAddr, sizeof(szAddr), sa->ai_addr, (socklen_t)sa->ai_addrlen))
 		{
-			showHostName ? printf("Connecting to %s (%s) ... ", addr, szAddr) : printf("Connecting to %s ... ", szAddr);
+			if (showHostName)
+				printf("Connecting to %s (%s) ... ", addr, szAddr);
+			else
+				printf("Connecting to %s ... ", szAddr);
+
 			fflush(stdout);
 		}
 
@@ -390,7 +394,7 @@ void getPrivateIPAddresses(int* numAddresses, char*** ipAddresses)
 
 	DWORD dwRetVal;
 	ULONG outBufLen = 16384;
-	const ULONG flags = GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME;
+	ULONG flags = GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME;
 
 	firstAdapter = (PIP_ADAPTER_ADDRESSES)vlmcsd_malloc(outBufLen);
 
@@ -434,7 +438,7 @@ void getPrivateIPAddresses(int* numAddresses, char*** ipAddresses)
 			if (!isPrivateIPAddress(currentAddress->Address.lpSockaddr, &length)) continue;
 
 			char *ipAddress = (char*)vlmcsd_malloc(64);
-			const int error = getnameinfo(currentAddress->Address.lpSockaddr, currentAddress->Address.iSockaddrLength, ipAddress, 64, NULL, 0, NI_NUMERICHOST);
+			int error = getnameinfo(currentAddress->Address.lpSockaddr, currentAddress->Address.iSockaddrLength, ipAddress, 64, NULL, 0, NI_NUMERICHOST);
 
 			if (error)
 			{
@@ -679,7 +683,7 @@ __pure int_fast8_t checkProtocolStack(const int addressfamily)
 	SOCKET s; // = INVALID_SOCKET;
 
 	s = socket(addressfamily, SOCK_STREAM, 0);
-	const int_fast8_t success = (s != INVALID_SOCKET);
+	int_fast8_t success = (s != INVALID_SOCKET);
 
 	socketclose(s);
 	return success;
@@ -764,7 +768,7 @@ static void serveClient(const SOCKET s_client, const DWORD RpcAssocGroup)
 
 #	if !defined(NO_LOG) && defined(_PEDANTIC)
 
-	const int result =
+	int result =
 		setsockopt(s_client, SOL_SOCKET, SO_RCVTIMEO, (sockopt_t)&to, sizeof(to)) ||
 		setsockopt(s_client, SOL_SOCKET, SO_SNDTIMEO, (sockopt_t)&to, sizeof(to));
 
